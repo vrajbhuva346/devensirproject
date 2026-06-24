@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shopify Product Import</title>
+
+<style>
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+}
+
+body{
+    font-family:Arial, Helvetica, sans-serif;
+    background:#f4f6f9;
+    padding:40px 20px;
+}
+
+.container{
+    max-width:900px;
+    margin:auto;
+}
+
+.card{
+    background:#fff;
+    border-radius:12px;
+    padding:30px;
+    box-shadow:0 2px 12px rgba(0,0,0,.08);
+}
+
+h1{
+    font-size:28px;
+    margin-bottom:10px;
+    color:#222;
+}
+
+.subtitle{
+    color:#666;
+    margin-bottom:25px;
+}
+
+label{
+    display:block;
+    font-weight:600;
+    margin-bottom:10px;
+}
+
+.help-text{
+    font-size:14px;
+    color:#666;
+    margin-bottom:12px;
+}
+
+.tags-input{
+    border:2px solid #dcdfe4;
+    border-radius:10px;
+    padding:10px;
+    min-height:55px;
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+    align-items:center;
+}
+
+.tags-input:focus-within{
+    border-color:#0d6efd;
+}
+
+.tags-input input{
+    border:none;
+    outline:none;
+    flex:1;
+    min-width:180px;
+    font-size:15px;
+}
+
+.tag{
+    background:#d5ebff;
+    color:#3d3d3d;
+    border-radius:20px;
+    padding:7px 12px;
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-size:14px;
+}
+
+.tag span{
+    cursor:pointer;
+    font-weight:bold;
+}
+
+.summary{
+    margin-top:15px;
+    color:#444;
+}
+
+.summary strong{
+    color:#0d6efd;
+}
+
+.error-message{
+    color:#dc3545;
+    margin-top:10px;
+    font-size:14px;
+    font-weight:600;
+}
+
+.import-btn{
+    margin-top:20px;
+    background:#198754;
+    color:#fff;
+    border:none;
+    padding:12px 28px;
+    border-radius:8px;
+    font-size:16px;
+    cursor:pointer;
+}
+
+.import-btn:hover{
+    background:#157347;
+}
+
+.import-btn:disabled{
+    background:#6c757d;
+    cursor:not-allowed;
+}
+
+.log-card{
+    margin-top:25px;
+    background:#111827;
+    color:#22c55e;
+    padding:20px;
+    border-radius:10px;
+    overflow:auto;
+    max-height:600px;
+    display:none;
+}
+
+.imported-list{
+    margin-bottom:15px;
+    color:#fff;
+}
+
+pre{
+    margin:0;
+    white-space:pre-wrap;
+    word-wrap:break-word;
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+
+    <div class="card">
+
+        <h1>Shopify Product Import</h1>
+
+        <p class="subtitle">
+            Add one or more Design Numbers and click Import Products.
+        </p>
+
+        <form id="importForm">
+
+            <label>Design Numbers</label>
+
+            <div class="help-text">
+                Type a Design Number and press Enter.
+            </div>
+
+            <div class="tags-input" id="tagsBox">
+                <input
+                    type="text"
+                    id="tagInput"
+                    placeholder="e.g. MD-R00403"
+                >
+            </div>
+
+            <div class="summary">
+                Total Designs:
+                <strong id="designCount">0</strong>
+            </div>
+
+            <div id="errorMessage" class="error-message"></div>
+
+            <input
+                type="hidden"
+                id="designnos"
+            >
+
+            <button type="submit" class="import-btn" id="importBtn">
+                Import Products
+            </button>
+
+        </form>
+
+    </div>
+
+    <!-- This replaces the PHP shell_exec output -->
+    <div class="log-card" id="logCard">
+        <div class="imported-list">
+            <strong>Design Numbers:</strong> <span id="logDesignNos"></span>
+        </div>
+        <pre id="logOutput"></pre>
+    </div>
+
+</div>
+
+<script>
+const tagInput = document.getElementById('tagInput');
+const tagsBox = document.getElementById('tagsBox');
+const hiddenInput = document.getElementById('designnos');
+const countElement = document.getElementById('designCount');
+const logCard = document.getElementById('logCard');
+const logDesignNos = document.getElementById('logDesignNos');
+const logOutput = document.getElementById('logOutput');
+const importBtn = document.getElementById('importBtn');
+
+let tags = [];
+
+function updateHiddenField() {
+    hiddenInput.value = tags.join(',');
+    countElement.textContent = tags.length;
+}
+
+function createTag(text) {
+    text = text.trim().toUpperCase();
+    if (!text || tags.includes(text)) {
+        return;
+    }
+    tags.push(text);
+    updateHiddenField();
+
+    const tag = document.createElement('div');
+    tag.className = 'tag';
+    tag.innerHTML = `${text} <span>&times;</span>`;
+
+    tag.querySelector('span').onclick = () => {
+        tags = tags.filter(item => item !== text);
+        updateHiddenField();
+        tag.remove();
+    };
+
+    tagsBox.insertBefore(tag, tagInput);
+}
+
+tagInput.addEventListener('keydown', function(e){
+    if(e.key === 'Enter' || e.key === ','){
+        e.preventDefault();
+        const value = this.value.trim();
+        if(value){
+            createTag(value);
+            this.value = '';
+        }
+    }
+});
+
+tagsBox.addEventListener('click', () => {
+    tagInput.focus();
+});
+
+document.getElementById('importForm').addEventListener('submit', async function(e){
+    e.preventDefault();
+    const errorBox = document.getElementById('errorMessage');
+
+    if(tags.length === 0){
+        errorBox.textContent = 'Please enter at least one Design Number.';
+        tagInput.focus();
+        return;
+    }
+
+    errorBox.textContent = '';
+    
+    // Show loading state
+    importBtn.disabled = true;
+    importBtn.textContent = 'Importing...';
+    
+    logCard.style.display = 'block';
+    logDesignNos.textContent = hiddenInput.value;
+    logOutput.textContent = 'Starting import on Vercel... Please wait...';
+
+    try {
+        const response = await fetch(`/api/import?designno=${encodeURIComponent(hiddenInput.value)}`, {
+            method: 'GET'
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            logOutput.textContent += '\n\n' + data.message + '\n\n(Detailed script logs can be viewed in your Vercel Dashboard Logs)';
+        } else {
+            logOutput.textContent += '\n\nError: ' + (data.error || 'Unknown error occurred.');
+        }
+    } catch (err) {
+        logOutput.textContent += '\n\nNetwork Error: ' + err.message;
+    } finally {
+        importBtn.disabled = false;
+        importBtn.textContent = 'Import Products';
+    }
+});
+</script>
+
+</body>
+</html>
