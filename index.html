@@ -280,31 +280,34 @@ document.getElementById('importForm').addEventListener('submit', async function(
     
     logCard.style.display = 'block';
     logDesignNos.textContent = hiddenInput.value;
-    logOutput.textContent = 'Starting import on Vercel... Please wait...';
+    logOutput.textContent = 'Connecting to server...\n';
 
-    try {
-        const response = await fetch(`/api/import?designno=${encodeURIComponent(hiddenInput.value)}`, {
-            method: 'GET'
-        });
-        
-        const contentType = response.headers.get("content-type");
-        if (contentType && contentType.includes("application/json")) {
-            const data = await response.json();
-            if (response.ok) {
-                logOutput.textContent += '\n\n' + data.message + '\n\n(Detailed script logs can be viewed in your Vercel Dashboard Logs)';
-            } else {
-                logOutput.textContent += '\n\nError: ' + (data.error || 'Unknown error occurred.');
-            }
-        } else {
-            const text = await response.text();
-            logOutput.textContent += '\n\nServer Error (' + response.status + '):\n' + text;
+    const url = `/api/import?designno=${encodeURIComponent(hiddenInput.value)}`;
+    const eventSource = new EventSource(url);
+
+    eventSource.onmessage = function(event) {
+        if (event.data === '[DONE]') {
+            eventSource.close();
+            importBtn.disabled = false;
+            importBtn.textContent = 'Import Products';
+            logOutput.textContent += '\n\n✅ Import process fully completed.';
+            logCard.scrollTop = logCard.scrollHeight;
+            return;
         }
-    } catch (err) {
-        logOutput.textContent += '\n\nNetwork Error: ' + err.message;
-    } finally {
+        
+        // Handle multiline strings
+        const msg = event.data.replace(/\\n/g, '\n');
+        logOutput.textContent += '\n' + msg;
+        logCard.scrollTop = logCard.scrollHeight; // Auto-scroll to bottom
+    };
+
+    eventSource.onerror = function(err) {
+        eventSource.close();
         importBtn.disabled = false;
         importBtn.textContent = 'Import Products';
-    }
+        logOutput.textContent += '\n\n❌ Connection closed or error occurred.';
+        logCard.scrollTop = logCard.scrollHeight;
+    };
 });
 </script>
 

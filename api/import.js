@@ -942,30 +942,42 @@ async function importProduct(items) {
   return productId;
 }
 
-async function main(designNo) {
+async function main(targetDesignNo) {
   const startTime = Date.now();
-  const response = await fetch(process.env.EXTERNAL_API);
+  if (!targetDesignNo) {
+    console.error('Target design number is required.');
+    return;
+  }
 
-  const json = await response.json();
+  const targetDesigns = targetDesignNo.split(',').map(d => d.trim());
+  console.log(`[SCRIPT] Looking for Design Numbers:`, targetDesigns);
+
+  console.log(`[SCRIPT] ⏳ Downloading data from External API... (This may take 15-30 seconds depending on data size)`);
+  const res = await fetch(process.env.EXTERNAL_API);
+  
+  if (!res.ok) {
+    throw new Error(`External API returned status: ${res.status}`);
+  }
+
+  console.log(`[SCRIPT] ⏳ Parsing the downloaded JSON data...`);
+  const json = await res.json();
+  console.log(`[SCRIPT] ✅ Total products loaded from API: ${json.data.length}`);
 
   const all = json.data || [];
 
+  console.log(`[SCRIPT] ⏳ Grouping ${all.length} items by designno...`);
   const grouped = {};
 
   for (const item of all) {
-
     const key = item.designno || item.articleno;
-
     if (!grouped[key]) grouped[key] = [];
-
     grouped[key].push(item);
   }
 
   const groupedProducts = Object.values(grouped);
+  console.log(`[SCRIPT] ✅ Grouped into ${groupedProducts.length} unique designs.`);
 
-  const requestedDesignNos = designNo
-  .split(',')
-  .map(item => item.trim());
+  const requestedDesignNos = targetDesigns;
 
   const availableDesignNos = new Set(
     groupedProducts.map(items => items[0]?.designno)
@@ -976,16 +988,14 @@ async function main(designNo) {
   );
 
   notFoundDesignNos.forEach(design => {
-    console.log(`❌ Design Number ${design} not found`);
+    console.log(`❌ Design Number ${design} not found in the external API data.`);
   });
 
-/* const products = groupedProducts.filter(
-    items => items[0]?.designno === designNo
-  );*/
-
   const products = groupedProducts.filter(
-  items => requestedDesignNos.includes(items[0]?.designno)
+    items => requestedDesignNos.includes(items[0]?.designno)
   );
+
+  console.log(`[SCRIPT] 🔍 Found ${products.length} design(s) matching your request.`);
 
   // const products = groupedProducts.slice(400, 500);
   // const products = groupedProducts;
@@ -1055,22 +1065,62 @@ async function main(designNo) {
 }
 
 module.exports = async function handler(req, res) {
+  // Set headers for Server-Sent Events (Live Streaming)
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders && res.flushHeaders();
+
+  const originalLog = console.log;
+  const originalError = console.error;
+
+  // Override console.log to stream to the browser
+  console.log = (...args) => {
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    originalLog(msg);
+    res.write(`data: ${msg.replace(/\n/g, '\\n')}\n\n`);
+  };
+
+  // Override console.error to stream to the browser
+  console.error = (...args) => {
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    originalError(msg);
+    res.write(`data: ❌ ERROR: ${msg.replace(/\n/g, '\\n')}\n\n`);
+  };
+
   try {
     const designNo = req.query.designno || req.body?.designnos || req.body?.designno;
     
+    console.log(`\n==============================================`);
+    console.log(`[API] 🚀 Received Import Request for: ${designNo}`);
+    console.log(`==============================================`);
+    
     if (!designNo) {
-      return res.status(400).json({ error: "Design number required. Pass ?designno=123" });
+      console.error("Design number required.");
+      res.write(`data: [DONE]\n\n`);
+      res.end();
+      return;
     }
 
+    console.log(`[API] 🔐 Checking Shopify Authentication...`);
     if (!ACCESS_TOKEN) {
       ACCESS_TOKEN = await generateToken();
+      console.log(`[API] 🔑 Generated new Shopify Access Token.`);
+    } else {
+      console.log(`[API] 🔑 Using existing Shopify Access Token.`);
     }
 
+    console.log(`[API] ⚙️ Starting main import script...`);
     await main(designNo);
     
-    return res.status(200).json({ success: true, message: `Imported design ${designNo} successfully` });
+    console.log(`[API] ✅ Successfully finished import request for ${designNo}`);
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ error: error.message });
+    console.error(`[API] ❌ FATAL ERROR: ${error.message}`);
+  } finally {
+    res.write(`data: [DONE]\n\n`);
+    res.end();
+    // Restore original console
+    console.log = originalLog;
+    console.error = originalError;
   }
 };
