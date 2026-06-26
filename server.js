@@ -1,13 +1,12 @@
 const http = require('http');
-const handler = require('./api/import.js');
 const url = require('url');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 
-// Load environment variables from .env file
-require('dotenv').config();
+const PORT = process.env.PORT || 3000;
 
-const server = http.createServer(async (req, res) => {
+const server = http.createServer((req, res) => {
     const parsedUrl = url.parse(req.url, true);
     
     // Serve index.html for root path
@@ -17,29 +16,52 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // Mock Vercel environment for the API route
     if (parsedUrl.pathname === '/api/import') {
-        const reqMock = {
-            query: parsedUrl.query,
-            body: {}
-        };
+        // Set headers for Server-Sent Events (Live Streaming)
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders && res.flushHeaders();
 
-        // Augment the real res object to act like Vercel's response
-        res.status = function(code) {
-            this.statusCode = code;
-            return this;
-        };
-        res.json = function(data) {
-            this.writeHead(this.statusCode || 200, { 'Content-Type': 'application/json' });
-            this.end(JSON.stringify(data));
-        };
-
-        try {
-            await handler(reqMock, res);
-        } catch (error) {
-            console.error('Local Server Error:', error);
-            res.status(500).json({ error: error.message });
+        const designNo = parsedUrl.query.designno || req.body?.designnos || req.body?.designno;
+        
+        res.write(`data: \n==============================================\n\n`);
+        res.write(`data: [SERVER] 🚀 Spawning background process for: ${designNo}\n\n`);
+        res.write(`data: ==============================================\n\n`);
+        
+        if (!designNo) {
+            res.write(`data: ❌ ERROR: Design number required.\n\n`);
+            res.write(`data: [DONE]\n\n`);
+            res.end();
+            return;
         }
+
+        // Spawn the pure CLI script as a child process
+        const child = spawn('node', ['import.js', designNo]);
+
+        // Capture standard output and send it as SSE data
+        child.stdout.on('data', (data) => {
+            const lines = data.toString().split('\n');
+            for (const line of lines) {
+                if (line) res.write(`data: ${line}\n\n`);
+            }
+        });
+
+        // Capture standard error and send it as SSE data
+        child.stderr.on('data', (data) => {
+            const lines = data.toString().split('\n');
+            for (const line of lines) {
+                if (line) res.write(`data: ❌ ERROR: ${line}\n\n`);
+            }
+        });
+
+        // When the background script completely finishes
+        child.on('close', (code) => {
+            res.write(`data: \n[SERVER] Background process exited with code ${code}\n\n`);
+            res.write(`data: [DONE]\n\n`);
+            res.end();
+        });
+
         return;
     }
 
@@ -48,9 +70,8 @@ const server = http.createServer(async (req, res) => {
     res.end('Not Found');
 });
 
-const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`\n✅ Local Server running!`);
-    console.log(`👉 Open http://localhost:${PORT} in your browser to test locally.`);
+    console.log(`\n✅ Standalone Web Server running!`);
+    console.log(`👉 Open http://localhost:${PORT} in your browser to start importing.`);
     console.log(`(Press Ctrl+C to stop)`);
 });
