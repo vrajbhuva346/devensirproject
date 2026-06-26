@@ -42,7 +42,10 @@ const server = http.createServer((req, res) => {
         child.stdout.on('data', (data) => {
             const lines = data.toString().split('\n');
             for (const line of lines) {
-                if (line) console.log(`${line}`);
+                // Filter out the annoying dotenv logs
+                if (line && !line.includes('injected env') && !line.includes('dotenv')) {
+                    res.write(`data: ${line}\n\n`);
+                }
             }
         });
 
@@ -50,7 +53,7 @@ const server = http.createServer((req, res) => {
         child.stderr.on('data', (data) => {
             const lines = data.toString().split('\n');
             for (const line of lines) {
-                if (line) console.log(`${line}`);
+                if (line) res.write(`data: ❌ ERROR: ${line}\n\n`);
             }
         });
 
