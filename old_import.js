@@ -1,15 +1,9 @@
-require('dotenv').config();
-
-const SHOP = process.env.SHOP;
-const CLIENT_ID = process.env.CLIENT_ID;
-const CLIENT_SECRET = process.env.CLIENT_SECRET;
-const EXTERNAL_API = process.env.EXTERNAL_API;
 
 let ACCESS_TOKEN = '';
 
 async function generateToken() {
   const response = await fetch(
-    `https://${SHOP}/admin/oauth/access_token`,
+    `https://${process.env.SHOP}/admin/oauth/access_token`,
     {
       method: 'POST',
       headers: {
@@ -17,8 +11,8 @@ async function generateToken() {
       },
       body: new URLSearchParams({
         grant_type: 'client_credentials',
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
+        client_id: process.env.CLIENT_ID,
+        client_secret: process.env.CLIENT_SECRET,
       }),
     }
   );
@@ -28,12 +22,7 @@ async function generateToken() {
   return data.access_token;
 }
 
-generateToken().then((token) => {
-  ACCESS_TOKEN = token;
-});
-
-const API_URL =
-  `https://${SHOP}/admin/api/2024-04/graphql.json`;
+const getApiUrl = () => `https://${process.env.SHOP}/admin/api/2024-04/graphql.json`;
 
 const sleep = ms =>
   new Promise(r => setTimeout(r, ms));
@@ -42,7 +31,7 @@ const collectionCache = {};
 
 async function graphql(query, variables = {}) {
 
-  const response = await fetch(API_URL, {
+  const response = await fetch(getApiUrl(), {
     method: 'POST',
 
     headers: {
@@ -199,8 +188,7 @@ function productMetafields(item) {
     { key: 'product_dimensions',value: item.height_width_length || '-'},
     { key: 'occassion', value: item.occassion || '' },
     { key: 'style', value: item.style || '' },
-    { key: 'sub_category', value: item.subcategory || '' },
-    { key: 'design_no', value: item.designno || '' }
+    { key: 'sub_category', value: item.subcategory || '' }
   ];
 
   const decimalFields = [
@@ -333,18 +321,9 @@ function buildVariantOptionValues(item) {
 }
 
 const GET_PRODUCT = `
-query ($query: String!) {
-  products(first: 1, query: $query) {
-    edges {
-      node {
-        id
-        title
-        handle
-        metafield(namespace: "custom", key: "design_no") {
-          value
-        }
-      }
-    }
+query ($handle: String!) {
+  productByHandle(handle: $handle) {
+    id
   }
 }
 `;
@@ -538,11 +517,7 @@ async function importProduct(items) {
 
   const first = items[0];
 
-  //const handle = (first.designno || '').toLowerCase().replace(/[_ ]/g, '-');
-
-  const handle = (
-  first.titleline?.trim() ? first.titleline : first.designno || '').toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '')
-  .replace(/\s+/g, '-').replace(/-+/g, '-');        
+  const handle = (first.designno || '').toLowerCase().replace(/[_ ]/g, '-');
 
   const title = first.titleline || first.designno || 'Untitled Product';
 
@@ -576,16 +551,9 @@ async function importProduct(items) {
     metafields: productMetafields(first)
   };
 
-  const searchQuery = `metafields.custom.design_no:"${first.designno}"`;
+  const existing = await graphql(GET_PRODUCT, { handle });
 
-  const existing = await graphql(GET_PRODUCT, {
-    query: searchQuery
-  });
-
-  //console.log(JSON.stringify(existing, null, 2));
-
-  const existingProduct =
-  existing?.data?.products?.edges?.[0]?.node;
+  const existingProduct = existing?.data?.productByHandle;
 
   let productId;
   
@@ -778,8 +746,6 @@ async function importProduct(items) {
       media
     });
 
-    //console.log(created.data.productCreate.userErrors);
-
     productId = created?.data?.productCreate?.product?.id;
   }
 
@@ -827,7 +793,7 @@ async function importProduct(items) {
         options
       });
 
-      await sleep(500);
+      await sleep(2000);
     }
 
     // UPDATE AUTO CREATED FIRST VARIANT
@@ -893,7 +859,7 @@ async function importProduct(items) {
 
     const remainingItems = items.slice(1);
 
-    const VARIANT_BATCH = 3;
+    const VARIANT_BATCH = 1;
 
     for (let i = 0; i < remainingItems.length; i += VARIANT_BATCH) {
 
@@ -976,30 +942,42 @@ async function importProduct(items) {
   return productId;
 }
 
-async function main(designNo) {
+async function main(targetDesignNo) {
   const startTime = Date.now();
-  const response = await fetch(EXTERNAL_API);
+  if (!targetDesignNo) {
+    console.error('Target design number is required.');
+    return;
+  }
 
-  const json = await response.json();
+  const targetDesigns = targetDesignNo.split(',').map(d => d.trim());
+  console.log(`[SCRIPT] Looking for Design Numbers:`, targetDesigns);
+
+  console.log(`[SCRIPT] ⏳ Downloading data from External API... (This may take 15-30 seconds depending on data size)`);
+  const res = await fetch(process.env.EXTERNAL_API);
+  
+  if (!res.ok) {
+    throw new Error(`External API returned status: ${res.status}`);
+  }
+
+  console.log(`[SCRIPT] ⏳ Parsing the downloaded JSON data...`);
+  const json = await res.json();
+  console.log(`[SCRIPT] ✅ Total products loaded from API: ${json.data.length}`);
 
   const all = json.data || [];
 
+  console.log(`[SCRIPT] ⏳ Grouping ${all.length} items by designno...`);
   const grouped = {};
 
   for (const item of all) {
-
     const key = item.designno || item.articleno;
-
     if (!grouped[key]) grouped[key] = [];
-
     grouped[key].push(item);
   }
 
   const groupedProducts = Object.values(grouped);
+  console.log(`[SCRIPT] ✅ Grouped into ${groupedProducts.length} unique designs.`);
 
-  const requestedDesignNos = designNo
-  .split(',')
-  .map(item => item.trim());
+  const requestedDesignNos = targetDesigns;
 
   const availableDesignNos = new Set(
     groupedProducts.map(items => items[0]?.designno)
@@ -1010,16 +988,14 @@ async function main(designNo) {
   );
 
   notFoundDesignNos.forEach(design => {
-    console.log(`❌ Design Number ${design} not found`);
+    console.log(`❌ Design Number ${design} not found in the external API data.`);
   });
 
-/* const products = groupedProducts.filter(
-    items => items[0]?.designno === designNo
-  );*/
-
   const products = groupedProducts.filter(
-  items => requestedDesignNos.includes(items[0]?.designno)
+    items => requestedDesignNos.includes(items[0]?.designno)
   );
+
+  console.log(`[SCRIPT] 🔍 Found ${products.length} design(s) matching your request.`);
 
   // const products = groupedProducts.slice(400, 500);
   // const products = groupedProducts;
@@ -1032,7 +1008,7 @@ async function main(designNo) {
 
   let failedCount = 0;
 
-  const PRODUCT_BATCH = 3;
+  const PRODUCT_BATCH = 5;
 
   for (let i = 0; i < products.length; i += PRODUCT_BATCH) {
 
@@ -1088,11 +1064,63 @@ async function main(designNo) {
 
 }
 
-const designNo = process.argv[2];
+module.exports = async function handler(req, res) {
+  // Set headers for Server-Sent Events (Live Streaming)
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders && res.flushHeaders();
 
-if (!designNo) {
-  console.log("❌ Design number required");
-  process.exit(1);
-}
+  const originalLog = console.log;
+  const originalError = console.error;
 
-main(designNo);
+  // Override console.log to stream to the browser
+  console.log = (...args) => {
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    originalLog(msg);
+    res.write(`data: ${msg.replace(/\n/g, '\\n')}\n\n`);
+  };
+
+  // Override console.error to stream to the browser
+  console.error = (...args) => {
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    originalError(msg);
+    res.write(`data: ❌ ERROR: ${msg.replace(/\n/g, '\\n')}\n\n`);
+  };
+
+  try {
+    const designNo = req.query.designno || req.body?.designnos || req.body?.designno;
+    
+    console.log(`\n==============================================`);
+    console.log(`[API] 🚀 Received Import Request for: ${designNo}`);
+    console.log(`==============================================`);
+    
+    if (!designNo) {
+      console.error("Design number required.");
+      res.write(`data: [DONE]\n\n`);
+      res.end();
+      return;
+    }
+
+    console.log(`[API] 🔐 Checking Shopify Authentication...`);
+    if (!ACCESS_TOKEN) {
+      ACCESS_TOKEN = await generateToken();
+      console.log(`[API] 🔑 Generated new Shopify Access Token.`);
+    } else {
+      console.log(`[API] 🔑 Using existing Shopify Access Token.`);
+    }
+
+    console.log(`[API] ⚙️ Starting main import script...`);
+    await main(designNo);
+    
+    console.log(`[API] ✅ Successfully finished import request for ${designNo}`);
+  } catch (error) {
+    console.error(`[API] ❌ FATAL ERROR: ${error.message}`);
+  } finally {
+    res.write(`data: [DONE]\n\n`);
+    res.end();
+    // Restore original console
+    console.log = originalLog;
+    console.error = originalError;
+  }
+};
